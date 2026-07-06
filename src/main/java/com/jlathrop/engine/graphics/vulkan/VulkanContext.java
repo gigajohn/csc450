@@ -9,11 +9,14 @@ import java.nio.LongBuffer;
 import java.util.HashSet;
 import java.util.Set;
 
+
 import static org.lwjgl.glfw.GLFWVulkan.glfwCreateWindowSurface;
 import static org.lwjgl.glfw.GLFWVulkan.glfwGetRequiredInstanceExtensions;
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.EXTDebugUtils.VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
 import static org.lwjgl.vulkan.KHRSurface.*;
+import java.util.ArrayList;
+import java.util.List;
 import static org.lwjgl.vulkan.VK10.*;
 
 import static org.lwjgl.vulkan.KHRSwapchain.*;
@@ -32,6 +35,10 @@ public class VulkanContext {
 
     private long swapchain;
 
+    private List<Long> swapchainImages;
+    private List<Long> swapchainImageViews;
+
+
     private static final boolean ENABLE_VALIDATION_LAYERS = true;
     private static final String VALIDATION_LAYER = "VK_LAYER_KHRONOS_validation";
 
@@ -41,6 +48,7 @@ public class VulkanContext {
         pickPhysicalDevice();
         createLogicalDevice();
         createSwapchain();
+        createImageViews();
     }
 
     private void createInstance() {
@@ -271,7 +279,58 @@ public class VulkanContext {
         }
     } 
 
+    private void createImageViews(){
+        try(MemoryStack stack = stackPush()){
+            IntBuffer imageCount = stack.mallocInt(1);
+            vkGetSwapchainImagesKHR(device, swapchain, imageCount, null);
+
+            LongBuffer pSwapchainImages = stack.mallocLong(imageCount.get(0));
+            vkGetSwapchainImagesKHR(device, swapchain, imageCount, pSwapchainImages);
+
+            swapchainImages = new ArrayList<>(imageCount.get(0));
+            for(int i = 0; i< pSwapchainImages.capacity();i++)
+                swapchainImages.add(pSwapchainImages.get(i));
+
+            swapchainImageViews = new ArrayList<>(swapchainImages.size());
+
+            for(Long swapcahinImage: swapchainImages){
+                VkImageViewCreateInfo createInfo = VkImageViewCreateInfo.calloc(stack);
+                createInfo.sType(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO);
+                createInfo.image(swapcahinImage);
+
+                //treat image as a 2d texture
+                createInfo.viewType(VK_IMAGE_VIEW_TYPE_2D);
+                //muust match format created in swapchain
+                createInfo.format(VK_FORMAT_B8G8R8A8_SRGB);
+
+                createInfo.components().r(VK_COMPONENT_SWIZZLE_IDENTITY);
+                createInfo.components().g(VK_COMPONENT_SWIZZLE_IDENTITY);
+                createInfo.components().b(VK_COMPONENT_SWIZZLE_IDENTITY);
+                createInfo.components().a(VK_COMPONENT_SWIZZLE_IDENTITY);
+
+                createInfo.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT);
+                createInfo.subresourceRange().baseMipLevel(0);
+                createInfo.subresourceRange().levelCount(1);
+                createInfo.subresourceRange().baseArrayLayer(0);
+                createInfo.subresourceRange().layerCount(1);
+
+                LongBuffer pImageView = stack.mallocLong(1);
+                if(vkCreateImageView(device, createInfo, null, pImageView) != VK_SUCCESS)
+                    throw new RuntimeException("Failed to create image view");
+
+                swapchainImageViews.add(pImageView.get(0));
+            }   
+            System.out.println("Image Views successfully created");
+
+        }
+    }
+
     public void cleanup() {
+        if (swapchainImageViews != null) {
+            for (Long imageView : swapchainImageViews) {
+                vkDestroyImageView(device, imageView, null);
+            }
+        }
         if(swapchain != 0){
             vkDestroySwapchainKHR(device, swapchain, null);
         }
