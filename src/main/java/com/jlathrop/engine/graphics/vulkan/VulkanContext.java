@@ -16,6 +16,8 @@ import static org.lwjgl.vulkan.EXTDebugUtils.VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
 import static org.lwjgl.vulkan.KHRSurface.*;
 import static org.lwjgl.vulkan.VK10.*;
 
+import static org.lwjgl.vulkan.KHRSwapchain.*;
+
 public class VulkanContext {
     private VkInstance instance;
     private long surface;
@@ -28,6 +30,8 @@ public class VulkanContext {
     private VkQueue presentQueue;
     private int presentQueueFamilyIndex = -1;
 
+    private long swapchain;
+
     private static final boolean ENABLE_VALIDATION_LAYERS = true;
     private static final String VALIDATION_LAYER = "VK_LAYER_KHRONOS_validation";
 
@@ -36,6 +40,7 @@ public class VulkanContext {
         createSurface(windowHandle);
         pickPhysicalDevice();
         createLogicalDevice();
+        createSwapchain();
     }
 
     private void createInstance() {
@@ -196,6 +201,11 @@ public class VulkanContext {
             createInfo.pQueueCreateInfos(queueCreateInfos);
             createInfo.pEnabledFeatures(deviceFeatures);
 
+            PointerBuffer deviceExtensions = stack.mallocPointer(1);
+            deviceExtensions.put(stack.UTF8(VK_KHR_SWAPCHAIN_EXTENSION_NAME));
+            deviceExtensions.flip();
+            createInfo.ppEnabledExtensionNames(deviceExtensions);
+
             PointerBuffer pDevice = stack.mallocPointer(1);
             if (vkCreateDevice(physicalDevice, createInfo, null, pDevice) != VK_SUCCESS) {
                 throw new RuntimeException("Failed to create logical device");
@@ -214,7 +224,57 @@ public class VulkanContext {
         }
     }
 
+    private void createSwapchain(){
+        try(MemoryStack stack = stackPush()){
+            VkSurfaceCapabilitiesKHR capabilities = VkSurfaceCapabilitiesKHR.calloc(stack);
+            vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, capabilities);
+
+            VkExtent2D extent = VkExtent2D.calloc(stack);
+            extent.width(800);
+            extent.height(600);
+
+            int imageCount = capabilities.minImageCount() +1;
+            if(capabilities.maxImageCount()>0 && imageCount > capabilities.maxImageCount())
+                imageCount = capabilities.maxImageCount();
+
+            VkSwapchainCreateInfoKHR createInfo = VkSwapchainCreateInfoKHR.calloc(stack);
+            createInfo.sType(VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR);
+            createInfo.surface(surface);
+            createInfo.minImageCount(imageCount);
+
+            createInfo.imageFormat(VK_FORMAT_B8G8R8A8_SRGB);
+            createInfo.imageColorSpace(VK_COLOR_SPACE_SRGB_NONLINEAR_KHR);
+            createInfo.imageExtent(extent);
+            createInfo.imageArrayLayers(1);
+            createInfo.imageUsage(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+
+            if(graphicsQueueFamilyIndex != presentQueueFamilyIndex){
+                createInfo.imageSharingMode(VK_SHARING_MODE_CONCURRENT);
+                createInfo.pQueueFamilyIndices(stack.ints(graphicsQueueFamilyIndex, presentQueueFamilyIndex));
+
+            }else
+                createInfo.imageSharingMode(VK_SHARING_MODE_EXCLUSIVE);
+
+            createInfo.preTransform(capabilities.currentTransform());
+            createInfo.compositeAlpha(VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR);
+            createInfo.presentMode(VK_PRESENT_MODE_FIFO_KHR);//VSYNC
+            createInfo.clipped();
+            createInfo.oldSwapchain(VK_NULL_HANDLE);
+
+            LongBuffer pSwapchain = stack.mallocLong(1);
+            if(vkCreateSwapchainKHR(device, createInfo, null, pSwapchain) != VK_SUCCESS)
+                throw new RuntimeException("Failed to create swapchain");
+
+            swapchain = pSwapchain.get(0);
+            System.out.println("Swapchain succesfully created");
+
+        }
+    } 
+
     public void cleanup() {
+        if(swapchain != 0){
+            vkDestroySwapchainKHR(device, swapchain, null);
+        }
         if (device != null) {
             vkDestroyDevice(device, null);
         }
