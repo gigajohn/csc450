@@ -8,7 +8,7 @@ public class MainGame {
         window.init();
 
         VulkanContext vulkan = new VulkanContext();
-        vulkan.init();
+        vulkan.init(window.getHandle());
 
         //engine Loop
         while(!window.shouldClose()){

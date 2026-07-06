@@ -1,5 +1,9 @@
 package com.jlathrop.engine.graphics.vulkan;
 
+import java.nio.LongBuffer;
+import static org.lwjgl.glfw.GLFWVulkan.glfwCreateWindowSurface;
+import static org.lwjgl.vulkan.KHRSurface.vkDestroySurfaceKHR;
+
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.*;
@@ -15,6 +19,7 @@ import static org.lwjgl.vulkan.VK10.*;
 
 public class VulkanContext {
     private VkInstance instance;
+    private long surface;
     private VkPhysicalDevice physicalDevice;
 
     private VkDevice device;
@@ -24,8 +29,9 @@ public class VulkanContext {
     private static final boolean ENABLE_VALIDATION_LAYERS = true;
     private static final String VALIDATION_LAYER = "VK_LAYER_KHRONOS_validation";
 
-    public void init() {
+    public void init(long windowHandle) {
         createInstance();
+        createSurface(windowHandle);
         pickPhysicalDevice();
         createLogicalDevice();
     }
@@ -166,7 +172,7 @@ public class VulkanContext {
             if (vkCreateDevice(physicalDevice, createInfo, null, pDevice) != VK_SUCCESS) {
                 throw new RuntimeException("Failed to create logical device");
             }
-            
+
             device = new VkDevice(pDevice.get(0), physicalDevice, createInfo);
 
             PointerBuffer pQueue = stack.mallocPointer(1);
@@ -178,12 +184,23 @@ public class VulkanContext {
 
     }
 
+    private void createSurface(long windowHandle){
+        try(MemoryStack stack = stackPush()){
+            LongBuffer pSurface = stack.mallocLong(1);
+            if (glfwCreateWindowSurface(instance, windowHandle, null, pSurface) != VK_SUCCESS) throw new RuntimeException("Failed to create Window Surface");
+
+            surface =pSurface.get(0);
+            System.out.println("Window Surface successfully created");
+        }
+    }
+
     public void cleanup() {
-        if(device != null){
+        if(device != null)
             vkDestroyDevice(device, null);
-        }
-        if (instance != null) {
+        if (surface !=0)
+            vkDestroySurfaceKHR(instance, surface, null);
+        if (instance != null) 
             vkDestroyInstance(instance, null);
-        }
+        
     }
 }
