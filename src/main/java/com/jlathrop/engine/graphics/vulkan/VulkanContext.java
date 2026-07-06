@@ -6,6 +6,8 @@ import org.lwjgl.vulkan.*;
 
 import java.nio.IntBuffer; // Required for GPU counting
 
+import javax.management.RuntimeErrorException;
+
 import static org.lwjgl.glfw.GLFWVulkan.glfwGetRequiredInstanceExtensions;
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.EXTDebugUtils.VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
@@ -15,12 +17,17 @@ public class VulkanContext {
     private VkInstance instance;
     private VkPhysicalDevice physicalDevice;
 
+    private VkDevice device;
+    private VkQueue graphicQueue;
+    private int graphicsQueueFamilyIndex = -1;
+
     private static final boolean ENABLE_VALIDATION_LAYERS = true;
     private static final String VALIDATION_LAYER = "VK_LAYER_KHRONOS_validation";
 
     public void init() {
         createInstance();
         pickPhysicalDevice();
+        createLogicalDevice();
     }
 
     private void createInstance() {
@@ -116,7 +123,65 @@ public class VulkanContext {
         }
     }
 
+    private void findQuueueFamilies(VkPhysicalDevice device){
+        try(MemoryStack stack = stackPush()){
+            IntBuffer queueFamilyCount = stack.mallocInt(1);
+            vkGetPhysicalDeviceQueueFamilyProperties(device, queueFamilyCount, null);
+
+            VkQueueFamilyProperties.Buffer queueFamilies = VkQueueFamilyProperties.calloc(queueFamilyCount.get(0), stack);
+            vkGetPhysicalDeviceQueueFamilyProperties(device, queueFamilyCount, queueFamilies);
+
+            for( int i = 0; i < queueFamilies.capacity(); i++){
+                if ((queueFamilies.get(i).queueFlags() & VK_QUEUE_GRAPHICS_BIT) != 0) {
+                    graphicsQueueFamilyIndex = i;
+                    break;
+                }
+            }
+            if(graphicsQueueFamilyIndex == -1) throw new RuntimeException("Failed to find a suitable graphics queue family");
+
+        }
+    }
+
+    private void createLogicalDevice(){
+        findQuueueFamilies(physicalDevice);
+
+        try(MemoryStack stack = stackPush()){
+            VkDeviceQueueCreateInfo.Buffer queueCreateInfos = VkDeviceQueueCreateInfo.calloc(1,stack);
+            queueCreateInfos.get(0).sType(VK_STRUCTURE_TYPE_EVENT_CREATE_INFO);
+            queueCreateInfos.get(0).queueFamilyIndex(graphicsQueueFamilyIndex);
+
+            //priority
+            queueCreateInfos.get(0).pQueuePriorities(stack.floats(1.0f));
+
+            //features needed
+            VkPhysicalDeviceFeatures deviceFeatures = VkPhysicalDeviceFeatures.calloc(stack);
+
+            //create logial dev
+            VkDeviceCreateInfo createInfo = VkDeviceCreateInfo.calloc(stack);
+            createInfo.sType(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO);
+            createInfo.pQueueCreateInfos(queueCreateInfos);
+            createInfo.pEnabledFeatures(deviceFeatures);
+            
+            PointerBuffer pDevice = stack.mallocPointer(1);
+            if (vkCreateDevice(physicalDevice, createInfo, null, pDevice) != VK_SUCCESS) {
+                throw new RuntimeException("Failed to create logical device");
+            }
+            
+            device = new VkDevice(pDevice.get(0), physicalDevice, createInfo);
+
+            PointerBuffer pQueue = stack.mallocPointer(1);
+            vkGetDeviceQueue(device, graphicsQueueFamilyIndex, 0, pQueue);
+            graphicQueue = new VkQueue(pQueue.get(0), device);
+
+            System.out.println("Logical Device and Graphical Queue succesfully created");
+        }
+
+    }
+
     public void cleanup() {
+        if(device != null){
+            vkDestroyDevice(device, null);
+        }
         if (instance != null) {
             vkDestroyInstance(instance, null);
         }
