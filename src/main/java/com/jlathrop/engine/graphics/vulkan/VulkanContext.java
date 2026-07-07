@@ -15,6 +15,7 @@ import java.util.Set;
 
 
 import static org.lwjgl.glfw.GLFWVulkan.glfwCreateWindowSurface;
+import static org.lwjgl.glfw.GLFWVulkan.glfwGetPhysicalDevicePresentationSupport;
 import static org.lwjgl.glfw.GLFWVulkan.glfwGetRequiredInstanceExtensions;
 import static org.lwjgl.system.MemoryStack.stackFloats;
 import static org.lwjgl.system.MemoryStack.stackMallocPointer;
@@ -54,13 +55,55 @@ public class VulkanContext {
     private long pipelineLayout;
     private long graphicsPipeline;
 
-    private static final boolean ENABLE_VALIDATION_LAYERS = true;
+    private static final boolean ENABLE_VALIDATION_LAYERS = false;
     private static final String VALIDATION_LAYER = "VK_LAYER_KHRONOS_validation";
 
     private List<Long> swapchainFramebuffers;
 
     private long commandPool;
     private List<Long> commandBuffers;
+
+    private long imageAvailableSemaphore;
+    private long renderFinishedSemaphore;
+    private long inFlightFence;
+
+    public void drawFrame() {
+        try (MemoryStack stack = stackPush()) {
+            vkWaitForFences(device, stack.longs(inFlightFence), true, Long.MAX_VALUE);
+            vkResetFences(device, stack.longs(inFlightFence));
+
+            IntBuffer pImageIndex = stack.mallocInt(1);
+            int acquireResult = vkAcquireNextImageKHR(device, swapchain, Long.MAX_VALUE, imageAvailableSemaphore, VK_NULL_HANDLE, pImageIndex);
+            if (acquireResult != VK_SUCCESS && acquireResult != VK_SUBOPTIMAL_KHR) {
+                throw new RuntimeException("Failed to acquire next swapchain image: " + acquireResult);
+            }
+
+            int imageIndex = pImageIndex.get(0);
+
+            VkSubmitInfo submitInfo = VkSubmitInfo.calloc(stack);
+            submitInfo.sType(VK_STRUCTURE_TYPE_SUBMIT_INFO);
+            submitInfo.pWaitSemaphores(stack.longs(imageAvailableSemaphore));
+            submitInfo.pWaitDstStageMask(stack.ints(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT));
+            submitInfo.pCommandBuffers(stack.pointers(commandBuffers.get(imageIndex)));
+            submitInfo.pSignalSemaphores(stack.longs(renderFinishedSemaphore));
+
+            if (vkQueueSubmit(graphicsQueue, submitInfo, inFlightFence) != VK_SUCCESS) {
+                throw new RuntimeException("Failed to submit draw command buffer!");
+            }
+
+            VkPresentInfoKHR presentInfo = VkPresentInfoKHR.calloc(stack);
+            presentInfo.sType(VK_STRUCTURE_TYPE_PRESENT_INFO_KHR);
+            presentInfo.pWaitSemaphores(stack.longs(renderFinishedSemaphore));
+            presentInfo.swapchainCount(1);
+            presentInfo.pSwapchains(stack.longs(swapchain));
+            presentInfo.pImageIndices(pImageIndex);
+
+            int presentResult = vkQueuePresentKHR(presentQueue, presentInfo);
+            if (presentResult != VK_SUCCESS && presentResult != VK_SUBOPTIMAL_KHR) {
+                throw new RuntimeException("Failed to present swapchain image: " + presentResult);
+            }
+        }
+    }
 
     public void init(long windowHandle) throws IOException{
         createInstance();
@@ -75,6 +118,7 @@ public class VulkanContext {
         createCommandPool();
         createCommandBuffers();
         recordCommandBuffers();
+        createSyncObjects();
     }
 
     private void createInstance() {
@@ -187,15 +231,12 @@ public class VulkanContext {
             VkQueueFamilyProperties.Buffer queueFamilies = VkQueueFamilyProperties.calloc(queueFamilyCount.get(0), stack);
             vkGetPhysicalDeviceQueueFamilyProperties(device, queueFamilyCount, queueFamilies);
 
-            IntBuffer presentSupport = stack.mallocInt(1);
-
             for (int i = 0; i < queueFamilies.capacity(); i++) {
                 if ((queueFamilies.get(i).queueFlags() & VK_QUEUE_GRAPHICS_BIT) != 0) {
                     graphicsQueueFamilyIndex = i;
                 }
 
-                vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface, presentSupport);
-                if (presentSupport.get(0) == VK_TRUE) {
+                if (glfwGetPhysicalDevicePresentationSupport(instance, device, i)) {
                     presentQueueFamilyIndex = i;
                 }
 
@@ -464,8 +505,8 @@ public class VulkanContext {
             VkPipelineRasterizationStateCreateInfo rasterizer = VkPipelineRasterizationStateCreateInfo.calloc(stack);
             rasterizer.sType(VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO);
             rasterizer.polygonMode(VK_POLYGON_MODE_FILL);
-            rasterizer.cullMode(VK_CULL_MODE_BACK_BIT);
-            rasterizer.frontFace(VK_FRONT_FACE_CLOCKWISE);
+            rasterizer.cullMode(VK_CULL_MODE_NONE);
+            rasterizer.frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE);
             rasterizer.lineWidth(1.0f);
 
             //Color Blending
@@ -557,20 +598,21 @@ public class VulkanContext {
     }
     private void createCommandBuffers() {
         commandBuffers = new ArrayList<>(swapchainFramebuffers.size());
+        try (MemoryStack stack = stackPush()) {
+            VkCommandBufferAllocateInfo allocInfo = VkCommandBufferAllocateInfo.calloc(stack);
+            allocInfo.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
+            allocInfo.commandPool(commandPool);
+            allocInfo.level(VK_COMMAND_BUFFER_LEVEL_PRIMARY);
+            allocInfo.commandBufferCount(swapchainFramebuffers.size());
 
-        VkCommandBufferAllocateInfo allocInfo = VkCommandBufferAllocateInfo.calloc();
-        allocInfo.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
-        allocInfo.commandPool(commandPool);
-        allocInfo.level(VK_COMMAND_BUFFER_LEVEL_PRIMARY);
-        allocInfo.commandBufferCount(swapchainFramebuffers.size());
+            PointerBuffer pCommandBuffers = stack.mallocPointer(swapchainFramebuffers.size());
+            if (vkAllocateCommandBuffers(device, allocInfo, pCommandBuffers) != VK_SUCCESS) {
+                throw new RuntimeException("Failed to allocate command buffers!");
+            }
 
-        PointerBuffer pCommandBuffers = stackMallocPointer(swapchainFramebuffers.size());
-        if (vkAllocateCommandBuffers(device, allocInfo, pCommandBuffers) != VK_SUCCESS) {
-            throw new RuntimeException("Failed to allocate command buffers!");
-        }
-
-        for (int i = 0; i < pCommandBuffers.capacity(); i++) {
-            commandBuffers.add(pCommandBuffers.get(i));
+            for (int i = 0; i < pCommandBuffers.capacity(); i++) {
+                commandBuffers.add(pCommandBuffers.get(i));
+            }
         }
     }
     private void recordCommandBuffers() {
@@ -593,6 +635,7 @@ public class VulkanContext {
             // reset screen
             VkClearValue.Buffer clearValues = VkClearValue.calloc(1);
             clearValues.color().float32(stackFloats(0.0f, 0.0f, 0.0f, 1.0f));
+            renderPassInfo.clearValueCount(1);
             renderPassInfo.pClearValues(clearValues);
 
             vkCmdBeginRenderPass(commandBuffer, renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
@@ -609,7 +652,35 @@ public class VulkanContext {
         }
     }
 
+    private void createSyncObjects() {
+    try (MemoryStack stack = stackPush()) {
+        VkSemaphoreCreateInfo semaphoreInfo = VkSemaphoreCreateInfo.calloc(stack);
+        semaphoreInfo.sType(VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO);
+
+        VkFenceCreateInfo fenceInfo = VkFenceCreateInfo.calloc(stack);
+        fenceInfo.sType(VK_STRUCTURE_TYPE_FENCE_CREATE_INFO);
+        fenceInfo.flags(VK_FENCE_CREATE_SIGNALED_BIT); // Start signaled
+
+        LongBuffer pImageAvailable = stack.mallocLong(1);
+        LongBuffer pRenderFinished = stack.mallocLong(1);
+        LongBuffer pInFlightFence = stack.mallocLong(1);
+
+        vkCreateSemaphore(device, semaphoreInfo, null, pImageAvailable);
+        vkCreateSemaphore(device, semaphoreInfo, null, pRenderFinished);
+        vkCreateFence(device, fenceInfo, null, pInFlightFence);
+
+        imageAvailableSemaphore = pImageAvailable.get(0);
+        renderFinishedSemaphore = pRenderFinished.get(0);
+        inFlightFence = pInFlightFence.get(0);
+    }
+}
+
     public void cleanup() {
+        vkDeviceWaitIdle(device);
+
+        vkDestroySemaphore(device, imageAvailableSemaphore, null);
+        vkDestroySemaphore(device, renderFinishedSemaphore, null);
+        vkDestroyFence(device, inFlightFence, null);
         if (commandPool != 0) {
             vkDestroyCommandPool(device, commandPool, null);
         }

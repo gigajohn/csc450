@@ -5,21 +5,22 @@ import com.jlathrop.engine.core.Window;
 import com.jlathrop.engine.graphics.vulkan.VulkanContext;
 
 public class MainGame {
-    public void run() throws IOException{
-        Window window = new Window("Vulkan Engine", 800, 600);
-        window.init();
+    private final Window window = new Window("Vulkan Engine", 800, 600);
+    private final VulkanContext vulkan = new VulkanContext();
 
-        VulkanContext vulkan = new VulkanContext();
+    public void run() throws IOException {
+        window.init();
         vulkan.init(window.getHandle());
 
-        //engine Loop
-        while(!window.shouldClose()){
-            window.update();
+        try {
+            while (!window.shouldClose()) {
+                window.update();
+                vulkan.drawFrame();
+            }
+        } finally {
+            vulkan.cleanup();
+            window.cleanup();
         }
-
-        //reverse of setup
-        vulkan.cleanup();
-        window.cleanup();
     }
 
     public static void main(String[] args) throws IOException {
