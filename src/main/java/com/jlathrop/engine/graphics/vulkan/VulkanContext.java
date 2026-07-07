@@ -16,6 +16,8 @@ import java.util.Set;
 
 import static org.lwjgl.glfw.GLFWVulkan.glfwCreateWindowSurface;
 import static org.lwjgl.glfw.GLFWVulkan.glfwGetRequiredInstanceExtensions;
+import static org.lwjgl.system.MemoryStack.stackFloats;
+import static org.lwjgl.system.MemoryStack.stackMallocPointer;
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.EXTDebugUtils.VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
 import static org.lwjgl.vulkan.KHRSurface.*;
@@ -57,6 +59,9 @@ public class VulkanContext {
 
     private List<Long> swapchainFramebuffers;
 
+    private long commandPool;
+    private List<Long> commandBuffers;
+
     public void init(long windowHandle) throws IOException{
         createInstance();
         createSurface(windowHandle);
@@ -67,6 +72,9 @@ public class VulkanContext {
         createRenderPass();
         createGraphicsPipeline(renderPass);
         createFramebuffers();
+        createCommandPool();
+        createCommandBuffers();
+        recordCommandBuffers();
     }
 
     private void createInstance() {
@@ -533,7 +541,84 @@ public class VulkanContext {
         }
     }
 
+    private void createCommandPool() {
+        try (MemoryStack stack = stackPush()) {
+            VkCommandPoolCreateInfo poolInfo = VkCommandPoolCreateInfo.calloc(stack);
+            poolInfo.sType(VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO);
+            poolInfo.flags(VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT); // Allows re-record
+            poolInfo.queueFamilyIndex(graphicsQueueFamilyIndex);
+
+            LongBuffer pCommandPool = stack.mallocLong(1);
+            if (vkCreateCommandPool(device, poolInfo, null, pCommandPool) != VK_SUCCESS) {
+                throw new RuntimeException("Failed to create command pool!");
+            }
+            commandPool = pCommandPool.get(0);
+        }
+    }
+    private void createCommandBuffers() {
+        commandBuffers = new ArrayList<>(swapchainFramebuffers.size());
+
+        VkCommandBufferAllocateInfo allocInfo = VkCommandBufferAllocateInfo.calloc();
+        allocInfo.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
+        allocInfo.commandPool(commandPool);
+        allocInfo.level(VK_COMMAND_BUFFER_LEVEL_PRIMARY);
+        allocInfo.commandBufferCount(swapchainFramebuffers.size());
+
+        PointerBuffer pCommandBuffers = stackMallocPointer(swapchainFramebuffers.size());
+        if (vkAllocateCommandBuffers(device, allocInfo, pCommandBuffers) != VK_SUCCESS) {
+            throw new RuntimeException("Failed to allocate command buffers!");
+        }
+
+        for (int i = 0; i < pCommandBuffers.capacity(); i++) {
+            commandBuffers.add(pCommandBuffers.get(i));
+        }
+    }
+    private void recordCommandBuffers() {
+        for (int i = 0; i < commandBuffers.size(); i++) {
+            VkCommandBuffer commandBuffer = new VkCommandBuffer(commandBuffers.get(i), device);
+            
+            // Begin recording
+            VkCommandBufferBeginInfo beginInfo = VkCommandBufferBeginInfo.calloc();
+            beginInfo.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
+            vkBeginCommandBuffer(commandBuffer, beginInfo);
+
+            //Start Render Pass
+            VkRenderPassBeginInfo renderPassInfo = VkRenderPassBeginInfo.calloc();
+            renderPassInfo.sType(VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO);
+            renderPassInfo.renderPass(renderPass);
+            renderPassInfo.framebuffer(swapchainFramebuffers.get(i));
+            renderPassInfo.renderArea().offset().set(0, 0);
+            renderPassInfo.renderArea().extent().set(800, 600);
+            
+            // reset screen
+            VkClearValue.Buffer clearValues = VkClearValue.calloc(1);
+            clearValues.color().float32(stackFloats(0.0f, 0.0f, 0.0f, 1.0f));
+            renderPassInfo.pClearValues(clearValues);
+
+            vkCmdBeginRenderPass(commandBuffer, renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+            //ind Pipeline and Draw
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+            vkCmdDraw(commandBuffer, 3, 1, 0, 0); // Draws a 3-vertex triangle!
+
+            //End Recording
+            vkCmdEndRenderPass(commandBuffer);
+            if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
+                throw new RuntimeException("Failed to record command buffer!");
+            }
+        }
+    }
+
     public void cleanup() {
+        if (commandPool != 0) {
+            vkDestroyCommandPool(device, commandPool, null);
+        }
+        if (graphicsPipeline != 0){
+             vkDestroyPipeline(device, graphicsPipeline, null);
+        }
+        if (pipelineLayout != 0){
+             vkDestroyPipelineLayout(device, pipelineLayout, null);
+        }
         if (swapchainFramebuffers != null) {
             for (Long framebuffer : swapchainFramebuffers) {
                 vkDestroyFramebuffer(device, framebuffer, null);
