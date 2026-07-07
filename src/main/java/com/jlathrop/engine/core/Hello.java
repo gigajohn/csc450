@@ -1,4 +1,4 @@
-package main;
+package com.jlathrop.engine.core;
 
 class Hello{
     public static void main(String args[]){

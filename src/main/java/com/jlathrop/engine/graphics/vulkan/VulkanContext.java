@@ -4,8 +4,12 @@ import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.*;
 
+import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -20,6 +24,11 @@ import java.util.List;
 import static org.lwjgl.vulkan.VK10.*;
 
 import static org.lwjgl.vulkan.KHRSwapchain.*;
+
+import java.nio.ByteBuffer;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+
 
 public class VulkanContext {
     private VkInstance instance;
@@ -38,17 +47,23 @@ public class VulkanContext {
     private List<Long> swapchainImages;
     private List<Long> swapchainImageViews;
 
+    private long renderPass;
+
+    private long pipelineLayout;
+    private long graphicsPipeline;
 
     private static final boolean ENABLE_VALIDATION_LAYERS = true;
     private static final String VALIDATION_LAYER = "VK_LAYER_KHRONOS_validation";
 
-    public void init(long windowHandle) {
+    public void init(long windowHandle) throws IOException{
         createInstance();
         createSurface(windowHandle);
         pickPhysicalDevice();
         createLogicalDevice();
         createSwapchain();
         createImageViews();
+        createRenderPass();
+        createGraphicsPipeline(renderPass);
     }
 
     private void createInstance() {
@@ -325,7 +340,180 @@ public class VulkanContext {
         }
     }
 
+    private void createRenderPass(){
+        try(MemoryStack stack = stackPush()){
+            //Describe the color image that render to
+            VkAttachmentDescription.Buffer colorAttachment = VkAttachmentDescription.calloc(1, stack);
+            colorAttachment.format(VK_FORMAT_B8G8R8A8_SRGB);
+            colorAttachment.samples(VK_SAMPLE_COUNT_1_BIT);//no anti-aliasing 
+
+            //to do before and after rendering
+            colorAttachment.loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR);
+            colorAttachment.storeOp(VK_ATTACHMENT_STORE_OP_STORE);
+
+            colorAttachment.stencilLoadOp(VK_ATTACHMENT_LOAD_OP_DONT_CARE);
+            colorAttachment.finalLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+
+            //create a referce to attach the subpass
+            VkAttachmentReference.Buffer colorAttachmentRef = VkAttachmentReference.calloc(1, stack);
+            colorAttachmentRef.attachment(0);
+            colorAttachmentRef.layout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+            //define main graphic subpass
+            VkSubpassDescription.Buffer subpass = VkSubpassDescription.calloc(1, stack);
+            subpass.pipelineBindPoint(VK_PIPELINE_BIND_POINT_GRAPHICS);
+            subpass.colorAttachmentCount(1);
+            subpass.pColorAttachments(colorAttachmentRef);
+
+            //create subpass
+            VkSubpassDependency.Buffer dependancy = VkSubpassDependency.calloc(1,stack);
+            dependancy.srcSubpass(VK_SUBPASS_EXTERNAL);
+            dependancy.dstSubpass(0);
+            dependancy.srcStageMask(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+            dependancy.srcAccessMask(0);
+            dependancy.dstStageMask(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+            dependancy.dstAccessMask(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+
+            //Packtogeather and buld render pass
+            VkRenderPassCreateInfo renderPathInfo = VkRenderPassCreateInfo.calloc(stack);
+            renderPathInfo.sType(VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO);
+            renderPathInfo.pAttachments(colorAttachment);
+            renderPathInfo.pSubpasses(subpass);
+            renderPathInfo.pDependencies(dependancy);
+
+            LongBuffer pRenderPass = stack.mallocLong(1);
+            if(vkCreateRenderPass(device, renderPathInfo, null, pRenderPass)!= VK_SUCCESS)
+                throw new RuntimeException("Failed to create render pass");
+
+            renderPass = pRenderPass.get(0);
+            System.out.println("Render Pass successfuly created");
+
+        }
+    }
+
+    private long createShaderModule(byte[] code){
+        try(MemoryStack stack = stackPush()){
+            ByteBuffer codeBuffer = ByteBuffer.allocateDirect(code.length);
+            codeBuffer.put(code);
+            codeBuffer.flip();
+
+            VkShaderModuleCreateInfo createInfo = VkShaderModuleCreateInfo.calloc();
+            createInfo.sType(VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
+            createInfo.pCode(codeBuffer);
+
+            LongBuffer pShaderModule = stack.mallocLong(1);
+            if (vkCreateShaderModule(device, createInfo, null, pShaderModule) !=VK_SUCCESS)
+                throw new RuntimeException("Failed to create shader module");
+            return pShaderModule.get(0);
+        }
+    }
+
+    private void createGraphicsPipeline(long renderPass) throws IOException{
+        try(MemoryStack stack = stackPush()){
+            long vertShaderModule = createShaderModule(Files.readAllBytes(Paths.get("src/main/resources/shaders/vert.spv")));
+            long fragShaderModule = createShaderModule(Files.readAllBytes(Paths.get("src/main/resources/shaders/frag.spv")));
+
+            VkPipelineShaderStageCreateInfo.Buffer shaderStages = VkPipelineShaderStageCreateInfo.calloc(2, stack);
+
+            shaderStages.get(0).sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO);
+            shaderStages.get(0).stage(VK_SHADER_STAGE_VERTEX_BIT);
+            shaderStages.get(0).module(vertShaderModule);
+            shaderStages.get(0).pName(stack.UTF8("main"));
+
+            shaderStages.get(1).sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO);
+            shaderStages.get(1).stage(VK_SHADER_STAGE_FRAGMENT_BIT);
+            shaderStages.get(1).module(fragShaderModule);
+            shaderStages.get(1).pName(stack.UTF8("main"));
+
+            //vertex input
+            VkPipelineVertexInputStateCreateInfo vertexInputInfo = VkPipelineVertexInputStateCreateInfo.calloc(stack);
+            vertexInputInfo.sType(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO);
+
+            //input assembly
+            VkPipelineInputAssemblyStateCreateInfo inputAssembly = VkPipelineInputAssemblyStateCreateInfo.calloc(stack);
+            inputAssembly.sType(VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO);
+            inputAssembly.topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+
+            //ViewPort and Scissor
+            VkViewport.Buffer viewport = VkViewport.calloc(1, stack);
+            viewport.x(0.0f); viewport.y(0.0f);
+            viewport.width(800.0f); viewport.height(600.0f);
+            viewport.minDepth(0.0f); viewport.maxDepth(1.0f);
+
+            VkRect2D.Buffer scissor = VkRect2D.calloc(1, stack);
+            scissor.offset().set(0, 0);
+            scissor.extent().set(800, 600);
+
+            VkPipelineViewportStateCreateInfo viewportState = VkPipelineViewportStateCreateInfo.calloc(stack);
+            viewportState.sType(VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO);
+            viewportState.pViewports(viewport);
+            viewportState.pScissors(scissor);
+
+            //Rasterizer
+            VkPipelineRasterizationStateCreateInfo rasterizer = VkPipelineRasterizationStateCreateInfo.calloc(stack);
+            rasterizer.sType(VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO);
+            rasterizer.polygonMode(VK_POLYGON_MODE_FILL);
+            rasterizer.cullMode(VK_CULL_MODE_BACK_BIT);
+            rasterizer.frontFace(VK_FRONT_FACE_CLOCKWISE);
+            rasterizer.lineWidth(1.0f);
+
+            //Color Blending
+            VkPipelineColorBlendAttachmentState.Buffer colorBlendAttachment = VkPipelineColorBlendAttachmentState.calloc(1, stack);
+            colorBlendAttachment.colorWriteMask(VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT);
+            colorBlendAttachment.blendEnable(false);
+
+            VkPipelineColorBlendStateCreateInfo colorBlending = VkPipelineColorBlendStateCreateInfo.calloc(stack);
+            colorBlending.sType(VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO);
+            colorBlending.pAttachments(colorBlendAttachment);
+
+            //pipeline layout
+            VkPipelineLayoutCreateInfo pipelineLayoutInfo = VkPipelineLayoutCreateInfo.calloc(stack);
+            pipelineLayoutInfo.sType(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
+            
+            LongBuffer pPipelineLayout = stack.mallocLong(1);
+            vkCreatePipelineLayout(device, pipelineLayoutInfo, null, pPipelineLayout);
+            pipelineLayout = pPipelineLayout.get(0);
+
+            //Create the Pipeline
+            VkGraphicsPipelineCreateInfo.Buffer pipelineInfo = VkGraphicsPipelineCreateInfo.calloc(1, stack);
+            pipelineInfo.sType(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO);
+            pipelineInfo.pStages(shaderStages);
+            pipelineInfo.pVertexInputState(vertexInputInfo);
+            pipelineInfo.pInputAssemblyState(inputAssembly);
+            pipelineInfo.pViewportState(viewportState);
+            pipelineInfo.pRasterizationState(rasterizer);
+            pipelineInfo.pMultisampleState(VkPipelineMultisampleStateCreateInfo.calloc(stack).sType(VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO).rasterizationSamples(VK_SAMPLE_COUNT_1_BIT));
+            pipelineInfo.pColorBlendState(colorBlending);
+            pipelineInfo.layout(pipelineLayout);
+            pipelineInfo.renderPass(renderPass);
+            pipelineInfo.subpass(0);
+
+            LongBuffer pPipeline = stack.mallocLong(1);
+            if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, pipelineInfo, null, pPipeline) != VK_SUCCESS) {
+                throw new RuntimeException("Failed to create graphics pipeline!");
+            }
+            graphicsPipeline = pPipeline.get(0);
+
+            // Cleanup modules
+            vkDestroyShaderModule(device, vertShaderModule, null);
+            vkDestroyShaderModule(device, fragShaderModule, null);
+            
+            System.out.println("Graphics Pipeline successfully created!");
+            
+        }
+    }
+
     public void cleanup() {
+
+        if (graphicsPipeline != 0){
+             vkDestroyPipeline(device, graphicsPipeline, null);
+        }
+        if (pipelineLayout != 0) {
+            vkDestroyPipelineLayout(device, pipelineLayout, null);
+        }
+        if (renderPass != 0) {
+            vkDestroyRenderPass(device, renderPass, null);
+        }
         if (swapchainImageViews != null) {
             for (Long imageView : swapchainImageViews) {
                 vkDestroyImageView(device, imageView, null);
