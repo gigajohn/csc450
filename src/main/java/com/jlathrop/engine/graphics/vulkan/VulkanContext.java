@@ -55,6 +55,8 @@ public class VulkanContext {
     private static final boolean ENABLE_VALIDATION_LAYERS = true;
     private static final String VALIDATION_LAYER = "VK_LAYER_KHRONOS_validation";
 
+    private List<Long> swapchainFramebuffers;
+
     public void init(long windowHandle) throws IOException{
         createInstance();
         createSurface(windowHandle);
@@ -64,6 +66,7 @@ public class VulkanContext {
         createImageViews();
         createRenderPass();
         createGraphicsPipeline(renderPass);
+        createFramebuffers();
     }
 
     private void createInstance() {
@@ -503,8 +506,38 @@ public class VulkanContext {
         }
     }
 
-    public void cleanup() {
+    private void createFramebuffers(){
+        swapchainFramebuffers = new ArrayList<>(swapchainImageViews.size());
 
+        try(MemoryStack stack = stackPush()){
+            for (long imageView : swapchainFramebuffers) {
+            LongBuffer pFramebuffer = stack.mallocLong(1);
+            
+            LongBuffer attachments = stack.longs(imageView);
+
+            VkFramebufferCreateInfo framebufferInfo = VkFramebufferCreateInfo.calloc(stack);
+            framebufferInfo.sType(VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO);
+            framebufferInfo.renderPass(renderPass);
+            framebufferInfo.pAttachments(attachments);
+            framebufferInfo.width(800);
+            framebufferInfo.height(600);
+            framebufferInfo.layers(1);
+
+            if (vkCreateFramebuffer(device, framebufferInfo, null, pFramebuffer) != VK_SUCCESS) {
+                throw new RuntimeException("Failed to create framebuffer!");
+            }
+            swapchainFramebuffers.add(pFramebuffer.get(0));
+        }
+        System.out.println("Framebuffers successfully created!");
+        }
+    }
+
+    public void cleanup() {
+        if (swapchainFramebuffers != null) {
+            for (Long framebuffer : swapchainFramebuffers) {
+                vkDestroyFramebuffer(device, framebuffer, null);
+            }
+        }
         if (graphicsPipeline != 0){
              vkDestroyPipeline(device, graphicsPipeline, null);
         }
