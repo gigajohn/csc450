@@ -510,24 +510,25 @@ public class VulkanContext {
         swapchainFramebuffers = new ArrayList<>(swapchainImageViews.size());
 
         try(MemoryStack stack = stackPush()){
-            for (long imageView : swapchainFramebuffers) {
-            LongBuffer pFramebuffer = stack.mallocLong(1);
-            
-            LongBuffer attachments = stack.longs(imageView);
+            for (int i = 0; i < swapchainImageViews.size(); i++) {
+                long imageView = swapchainImageViews.get(i);
+                
+                LongBuffer pFramebuffer = stack.mallocLong(1);
+                
+                VkFramebufferCreateInfo framebufferInfo = VkFramebufferCreateInfo.calloc(stack);
+                framebufferInfo.sType(VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO);
+                framebufferInfo.renderPass(renderPass);
+                framebufferInfo.pAttachments(stack.longs(imageView));
+                framebufferInfo.width(800);
+                framebufferInfo.height(600);
+                framebufferInfo.layers(1);
 
-            VkFramebufferCreateInfo framebufferInfo = VkFramebufferCreateInfo.calloc(stack);
-            framebufferInfo.sType(VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO);
-            framebufferInfo.renderPass(renderPass);
-            framebufferInfo.pAttachments(attachments);
-            framebufferInfo.width(800);
-            framebufferInfo.height(600);
-            framebufferInfo.layers(1);
-
-            if (vkCreateFramebuffer(device, framebufferInfo, null, pFramebuffer) != VK_SUCCESS) {
-                throw new RuntimeException("Failed to create framebuffer!");
+                if (vkCreateFramebuffer(device, framebufferInfo, null, pFramebuffer) != VK_SUCCESS) {
+                    throw new RuntimeException("Failed to create framebuffer!");
+                }
+                swapchainFramebuffers.add(pFramebuffer.get(0));
             }
-            swapchainFramebuffers.add(pFramebuffer.get(0));
-        }
+        
         System.out.println("Framebuffers successfully created!");
         }
     }
