@@ -1,6 +1,6 @@
-package main;
+package com.jlathrop.engine.core;
 
-class Main{
+class Hello{
     public static void main(String args[]){
         System.out.println("Hello World");
     }

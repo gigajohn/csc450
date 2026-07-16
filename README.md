@@ -32,3 +32,42 @@ yes
 example)
 
 src/main/Main.java
+
+
+
+----
+Ideas
+- Game engine
+   - using vulkan as the graphical api
+   - https://www.lwjgl.org/, for the game library 
+
+my-game-engine/  
+├── pom.xml  
+├── src/  
+│   ├── main/  
+│   │   ├── java/com/yourname/engine/  
+│   │   │   ├── core/                  # The main loop, window management, and input  
+│   │   │   │   ├── Window.java  
+│   │   │   │   └── EngineLoop.java  
+│   │   │   ├── ecs/                   # Entity-Component-System architecture  
+│   │   │   │   ├── Entity.java  
+│   │   │   │   └── System.java  
+│   │   │   ├── graphics/              # 100% abstract graphics interfaces  
+│   │   │   │   ├── Renderer.java      # Interface your game logic actually calls  
+│   │   │   │   ├── Mesh.java  
+│   │   │   │   └── vulkan/            # The ONLY place Vulkan code exists  
+│   │   │   │       ├── VulkanRenderer.java  # Implements Renderer interface  
+│   │   │   │       ├── VulkanContext.java   # Instance, Device, Swapchain  
+│   │   │   │       └── VulkanPipeline.java  # Shader loading and pipeline state  
+│   │   │   └── game/                  # The actual game built on top of the engine  
+│   │   │       └── MainGame.java
+│   │   └── resources/                 # Non-code assets automatically bundled by Maven  
+│   │       ├── shaders/  
+│   │       │   ├── triangle.vert      # Vertex shader  
+│   │       │   └── triangle.frag      # Fragment shader  
+│   │       └── textures/  
+│   └── test/  
+│       └── java/com/yourname/engine/  # JUnit tests  
+│           └── ecs/  
+│               └── EcsLogicTest.java  
+
