@@ -9,6 +9,7 @@ public class Window {
     private final int width;
     private final int height;
     private final String title;
+    private boolean framebufferResized = false;
 
     public Window(String title, int width, int height){
         this.title = title;
@@ -26,11 +27,15 @@ public class Window {
 
         glfwDefaultWindowHints();
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API); //Disable OpenGL context
-        glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);   //Disable resizing initially
+        glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);   //Disable resizing initially
 
-        windowHandle = glfwCreateWindow(width, height, title, NULL, NULL);//capital NULL required
+        windowHandle = glfwCreateWindow(width, height, title, NULL, NULL);
         if(windowHandle == NULL)
             throw new RuntimeException("Failed to create GLFW window");
+
+        glfwSetFramebufferSizeCallback(windowHandle, (window, width, height) -> {
+            framebufferResized = true;
+        });
 
     }
 
@@ -51,6 +56,14 @@ public class Window {
     //for vulkan
     public long getHandle() {
         return windowHandle;
+    }
+
+    public boolean isFramebufferResized() {
+        return framebufferResized;
+    }
+
+    public void setFramebufferResized(boolean resized) {
+        this.framebufferResized = resized;
     }
 
 }

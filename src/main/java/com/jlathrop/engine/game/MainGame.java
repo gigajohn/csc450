@@ -15,7 +15,7 @@ public class MainGame {
         try {
             while (!window.shouldClose()) {
                 window.update();
-                vulkan.drawFrame();
+                vulkan.drawFrame(window);
             }
         } finally {
             vulkan.cleanup();

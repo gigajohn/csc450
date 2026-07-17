@@ -25,3 +25,5 @@ replay_pid*
 
 .metals/*
 C:\Users\lathr\Documents\GitHub\csc450\.metals\metals.lock.db
+.settings/*
+target/*
